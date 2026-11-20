@@ -1,4 +1,5 @@
-node_modules/
+# VICE BAY v2 — ignored files (never committed).
+node_modules
+out/
 .DS_Store
 *.log
-/out/

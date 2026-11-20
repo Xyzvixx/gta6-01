@@ -1,64 +1,63 @@
-// A tiny static server for game/ (Node 22, standard library only), so the
-// entry can be played locally without a build step: `node serve.ts` serves
-// game/ on http://localhost:8080 (or --port N). It sends the MIME types a
-// browser game needs and refuses any path outside game/.
-import { createReadStream, statSync } from 'node:fs';
+// VICE BAY v2 — tiny static server for local playtesting (Node 22, stdlib only).
+// Serves the repo root; the game page is reachable at /, /index.html and
+// /game/, with ./src/... imports resolving in all three places.
+// Usage: node serve.ts [--port <n>]  (default port 8080).
+
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { extname, join, normalize, resolve } from 'node:path';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const DEFAULT_PORT = 8080;
+let port = DEFAULT_PORT;
+const flagAt = process.argv.indexOf('--port');
+if (flagAt >= 0 && process.argv[flagAt + 1]) {
+  const wanted = Number.parseInt(process.argv[flagAt + 1], 10);
+  if (Number.isInteger(wanted) && wanted > 0 && wanted < 65536) port = wanted;
+}
 
-const MIME = {
+const ROOT = resolve(import.meta.dirname);
+
+const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
+  '.ts': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname;
+function resolveRequestPath(rawPath) {
+  let path = rawPath;
+  // The game page lives at /game/index.html but is also served at the root,
+  // so its relative ./src/... imports must resolve there too.
+  if (path === '/' || path === '/index.html') path = '/game/index.html';
+  if (path === '/game' || path === '/game/') path = '/game/index.html';
+  if (path.startsWith('/src/')) path = '/game' + path;
+  return join(ROOT, normalize(path));
+}
+
+const server = createServer((req, res) => {
+  const url = new URL(req.url || '/', `http://localhost:${port}`);
+  const file = resolveRequestPath(decodeURIComponent(url.pathname));
+  if (!file.startsWith(ROOT) || !existsSync(file) || !statSync(file).isFile()) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found\n');
+    return;
+  }
   try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {
-    response.writeHead(400).end('bad request');
-    return;
+    const body = readFileSync(file);
+    res.writeHead(200, { 'content-type': MIME_TYPES[extname(file)] || 'application/octet-stream' });
+    res.end(body);
+  } catch (err) {
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('read error\n');
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
-    return;
-  }
-  let size;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+});
+
+server.listen(port, () => {
+  console.log(`VICE BAY v2 serving at http://localhost:${port}/`);
 });
